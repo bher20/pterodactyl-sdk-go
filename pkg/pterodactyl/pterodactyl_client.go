@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -109,12 +113,25 @@ func GetServerBackup(pterodactylServer PterodactylServer, server Server, backupI
 	return backup, nil
 }
 
-func DownloadServerBackup(pterodactylServer PterodactylServer, server Server, backupId string) ([]byte, error) {
+func DeleteServerBackup(pterodactylServer PterodactylServer, server Server, backupId string) (Backup, error) {
+	var backup Backup
+	err := callApi(&backup, pterodactylServer, string(http.MethodDelete), ApiEndpointServer, []string{server.Attributes.UUID, ApiEndpointBackups, backupId}, nil)
+	if err != nil {
+		return backup, err
+	}
+
+	return backup, nil
+}
+
+func DownloadServerBackup(pterodactylServer PterodactylServer, server Server, backupId string, destination string) (*os.File, error) {
 	var backupUrl BackupUrl
+	var out *os.File
 	err := callApi(&backupUrl, pterodactylServer, http.MethodGet, ApiEndpointServer, []string{server.Attributes.UUID, ApiEndpointBackups, backupId, "download"}, nil)
 	if err != nil {
 		return nil, err
 	}
+
+	logrus.Trace(fmt.Sprintf("DownloadServerBackup -> Attempting to download: '%s'", backupUrl.Attributes.URL))
 
 	req, _ := http.NewRequest(http.MethodGet, backupUrl.Attributes.URL, nil)
 	req.Header.Add("Accept", "application/json")
@@ -124,18 +141,26 @@ func DownloadServerBackup(pterodactylServer PterodactylServer, server Server, ba
 	}
 
 	defer res.Body.Close()
-	body, _ := ioutil.ReadAll(res.Body)
+	logrus.Trace(fmt.Sprintf("DownloadServerBackup -> Status Code: '%d'", res.StatusCode))
 
-	if res.StatusCode != http.StatusOK {
-		var apiErrors ApiErrors
-
-		err = json.Unmarshal(body, &apiErrors)
+	if res.StatusCode == http.StatusOK {
+		out, err = os.Create(destination)
+		logrus.Trace(fmt.Sprintf("DownloadServerBackup -> Creating file: '%s'", destination))
 		if err != nil {
 			return nil, err
 		}
+		defer out.Close()
+
+		logrus.Trace(fmt.Sprintf("DownloadServerBackup -> Copying repsonse body to file: '%s'", destination))
+		_, err = io.Copy(out, res.Body)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		return nil, fmt.Errorf("download failed with status code %d", res.StatusCode)
 	}
 
-	return body, nil
+	return out, nil
 }
 
 func BackupServer(pterodactylServer PterodactylServer, server Server) (Backup, error) {
