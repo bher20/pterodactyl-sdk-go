@@ -1,4 +1,4 @@
-module github.com/bher20/pterodactyl-sdk-go
+module github.com/bherville/pterodactyl-sdk-go
 
 go 1.20
 
