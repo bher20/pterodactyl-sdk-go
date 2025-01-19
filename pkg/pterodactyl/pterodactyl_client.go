@@ -10,8 +10,13 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
-	"github.com/sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
+)
+
+var (
+	WaitForBackupSeconds int64 = 5
 )
 
 const (
@@ -131,7 +136,7 @@ func DownloadServerBackup(pterodactylServer PterodactylServer, server Server, ba
 		return nil, err
 	}
 
-	logrus.Trace(fmt.Sprintf("DownloadServerBackup -> Attempting to download: '%s'", backupUrl.Attributes.URL))
+	log.Trace(fmt.Sprintf("DownloadServerBackup -> Attempting to download: '%s'", backupUrl.Attributes.URL))
 
 	req, _ := http.NewRequest(http.MethodGet, backupUrl.Attributes.URL, nil)
 	req.Header.Add("Accept", "application/json")
@@ -141,17 +146,17 @@ func DownloadServerBackup(pterodactylServer PterodactylServer, server Server, ba
 	}
 
 	defer res.Body.Close()
-	logrus.Trace(fmt.Sprintf("DownloadServerBackup -> Status Code: '%d'", res.StatusCode))
+	log.Trace(fmt.Sprintf("DownloadServerBackup -> Status Code: '%d'", res.StatusCode))
 
 	if res.StatusCode == http.StatusOK {
 		out, err = os.Create(destination)
-		logrus.Trace(fmt.Sprintf("DownloadServerBackup -> Creating file: '%s'", destination))
+		log.Trace(fmt.Sprintf("DownloadServerBackup -> Creating file: '%s'", destination))
 		if err != nil {
 			return nil, err
 		}
 		defer out.Close()
 
-		logrus.Trace(fmt.Sprintf("DownloadServerBackup -> Copying repsonse body to file: '%s'", destination))
+		log.Trace(fmt.Sprintf("DownloadServerBackup -> Copying repsonse body to file: '%s'", destination))
 		_, err = io.Copy(out, res.Body)
 		if err != nil {
 			return nil, err
@@ -172,4 +177,27 @@ func BackupServer(pterodactylServer PterodactylServer, server Server) (Backup, e
 	}
 
 	return backup, nil
+}
+
+func BackupServerWithWait(pterodactylServer PterodactylServer, server Server) (*Backup, error) {
+	backup, err := BackupServer(pterodactylServer, server)
+	if err != nil {
+		return nil, err
+	}
+
+	// Wait until backup is completed on the pterodactylServer side
+	for {
+		backup, err = GetServerBackup(pterodactylServer, server, backup.Attributes.UUID)
+		if err != nil {
+			return nil, err
+		}
+
+		if !time.Time.IsZero(backup.Attributes.CompletedAt) {
+			time.Sleep(time.Duration(WaitForBackupSeconds) * time.Second)
+			log.Debugf("Waiting for backup...")
+			break
+		}
+	}
+
+	return &backup, nil
 }
